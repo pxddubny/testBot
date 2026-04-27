@@ -98,11 +98,16 @@ pip install -r requirements.txt
 ### 4) Что вставлять в переменные окружения
 Скопируйте `.env.example` в `.env` и подставьте свои значения:
 ```bash
-export BOT_TOKEN="1234567890:AAEXAMPLE_TOKEN"
-export ADMIN_ID="123456789"
-export CHANNEL_ID="-1001234567890"
-export CHANNEL_LINK="https://t.me/your_channel_name"
-export DB_PATH="bot.db"
+cp .env.example .env
+```
+
+Пример содержимого `.env`:
+```bash
+BOT_TOKEN=1234567890:AAEXAMPLE_TOKEN
+ADMIN_ID=123456789
+CHANNEL_ID=-1001234567890
+CHANNEL_LINK=https://t.me/your_channel_name
+DB_PATH=bot.db
 ```
 
 Расшифровка:
@@ -112,10 +117,18 @@ export DB_PATH="bot.db"
 - `CHANNEL_LINK` — ссылка на канал для кнопки «Подписаться».
 - `DB_PATH` — путь к SQLite базе (обычно оставьте `bot.db`).
 
+> Бот автоматически читает `.env` через `python-dotenv`, поэтому `export ...` вручную делать не обязательно.
+
 ## Запуск
 ```bash
 python bot.py
 ```
+
+## Частые проблемы
+- Ошибка `RuntimeError: Заполните BOT_TOKEN и ADMIN_ID в переменных окружения`:
+  1. Проверьте, что файл называется именно `.env` (а не `.env.example`).
+  2. Проверьте, что в `.env` есть строки `BOT_TOKEN=...` и `ADMIN_ID=...`.
+  3. Перезапустите бота после изменения `.env`.
 
 ## requirements.txt
 ```text

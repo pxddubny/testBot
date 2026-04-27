@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 
 @dataclass
 class Config:
@@ -14,6 +16,9 @@ class Config:
 
 def load_config() -> Config:
     """Загружает конфигурацию из переменных окружения."""
+    # Автоматически подхватываем переменные из .env (если файл существует).
+    load_dotenv(".env")
+
     return Config(
         bot_token=os.getenv("BOT_TOKEN", ""),
         admin_id=int(os.getenv("ADMIN_ID", "0")),
