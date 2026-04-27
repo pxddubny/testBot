@@ -55,6 +55,33 @@ class Database:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS services (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    price INTEGER NOT NULL,
+                    is_active INTEGER DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS appointment_services (
+                    appointment_id INTEGER NOT NULL,
+                    service_id INTEGER NOT NULL,
+                    PRIMARY KEY(appointment_id, service_id),
+                    FOREIGN KEY(appointment_id) REFERENCES appointments(id),
+                    FOREIGN KEY(service_id) REFERENCES services(id)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO services(name, price, is_active) VALUES ('Френч', 1000, 1)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO services(name, price, is_active) VALUES ('Квадрат', 500, 1)"
+            )
 
     def add_work_day(self, work_date: str) -> None:
         with self.connect() as conn:
@@ -73,13 +100,6 @@ class Database:
                 "UPDATE work_days SET is_closed = ? WHERE work_date = ?",
                 (int(is_closed), work_date),
             )
-
-    def is_day_closed(self, work_date: str) -> bool:
-        with self.connect() as conn:
-            row = conn.execute(
-                "SELECT is_closed FROM work_days WHERE work_date = ?", (work_date,)
-            ).fetchone()
-            return bool(row and row["is_closed"])
 
     def add_slot(self, work_date: str, slot_time: str) -> None:
         with self.connect() as conn:
@@ -102,6 +122,51 @@ class Database:
                 "UPDATE slots SET is_deleted = 1 WHERE work_date = ? AND slot_time = ?",
                 (work_date, slot_time),
             )
+
+    def add_service(self, name: str, price: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO services(id, name, price, is_active) VALUES((SELECT id FROM services WHERE name = ?), ?, ?, 1)",
+                (name, name, price),
+            )
+
+    def get_services(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT id, name, price FROM services WHERE is_active = 1 ORDER BY name"
+            ).fetchall()
+
+    def get_services_by_ids(self, service_ids: list[int]) -> list[sqlite3.Row]:
+        if not service_ids:
+            return []
+        placeholders = ",".join(["?"] * len(service_ids))
+        with self.connect() as conn:
+            return conn.execute(
+                f"SELECT id, name, price FROM services WHERE id IN ({placeholders}) AND is_active = 1 ORDER BY name",
+                tuple(service_ids),
+            ).fetchall()
+
+    def link_appointment_services(self, appointment_id: int, service_ids: list[int]) -> None:
+        if not service_ids:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO appointment_services(appointment_id, service_id) VALUES(?, ?)",
+                [(appointment_id, service_id) for service_id in service_ids],
+            )
+
+    def get_appointment_services(self, appointment_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT s.name, s.price
+                FROM appointment_services aps
+                JOIN services s ON s.id = aps.service_id
+                WHERE aps.appointment_id = ?
+                ORDER BY s.name
+                """,
+                (appointment_id,),
+            ).fetchall()
 
     def get_available_dates(self, start_date: str, end_date: str) -> list[str]:
         with self.connect() as conn:
@@ -213,14 +278,19 @@ class Database:
                        a.user_name,
                        a.phone,
                        a.user_id,
-                       a.status
+                       a.status,
+                       a.id AS appointment_id,
+                       COALESCE(GROUP_CONCAT(sv.name || ' (' || sv.price || '₽)', ', '), '-') AS services
                 FROM slots s
                 LEFT JOIN appointments a
                   ON a.work_date = s.work_date
                  AND a.slot_time = s.slot_time
                  AND a.status = 'active'
+                LEFT JOIN appointment_services aps ON aps.appointment_id = a.id
+                LEFT JOIN services sv ON sv.id = aps.service_id
                 WHERE s.work_date = ?
                   AND s.is_deleted = 0
+                GROUP BY s.slot_time, a.user_name, a.phone, a.user_id, a.status, a.id
                 ORDER BY s.slot_time
                 """,
                 (work_date,),
@@ -242,3 +312,48 @@ class Database:
                     (row["id"],),
                 )
             return row
+
+    def get_appointment_months(self) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT SUBSTR(work_date, 1, 7) AS ym
+                FROM appointments
+                ORDER BY ym DESC
+                """
+            ).fetchall()
+            return [r["ym"] for r in rows]
+
+    def get_appointment_days_by_month(self, year_month: str) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT work_date
+                FROM appointments
+                WHERE work_date LIKE ?
+                ORDER BY work_date
+                """,
+                (f"{year_month}%",),
+            ).fetchall()
+            return [r["work_date"] for r in rows]
+
+    def get_appointments_by_date(self, work_date: str) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT a.id,
+                       a.slot_time,
+                       a.user_name,
+                       a.phone,
+                       a.user_id,
+                       a.status,
+                       COALESCE(GROUP_CONCAT(sv.name || ' (' || sv.price || '₽)', ', '), '-') AS services
+                FROM appointments a
+                LEFT JOIN appointment_services aps ON aps.appointment_id = a.id
+                LEFT JOIN services sv ON sv.id = aps.service_id
+                WHERE a.work_date = ?
+                GROUP BY a.id, a.slot_time, a.user_name, a.phone, a.user_id, a.status
+                ORDER BY a.slot_time
+                """,
+                (work_date,),
+            ).fetchall()

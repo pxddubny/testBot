@@ -4,7 +4,7 @@ from aiogram.types import CallbackQuery, Message
 
 from config import Config
 from database.db import Database
-from keyboards.inline import admin_menu_kb
+from keyboards.inline import admin_menu_kb, days_kb, months_kb
 from states import AdminStates
 from utils.scheduler import ReminderService
 
@@ -146,10 +146,107 @@ async def admin_view_schedule_show(message: Message, state: FSMContext, db: Data
     lines = [f"<b>Расписание на {work_date}</b>"]
     for r in rows:
         if r["user_name"]:
-            lines.append(f"• {r['slot_time']} — занято ({r['user_name']}, {r['phone']})")
+            lines.append(
+                f"• {r['slot_time']} — занято ({r['user_name']}, {r['phone']})\n"
+                f"  Услуги: {r['services']}"
+            )
         else:
             lines.append(f"• {r['slot_time']} — свободно")
     await message.answer("\n".join(lines), parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin_records_calendar")
+async def admin_records_calendar(callback: CallbackQuery, db: Database, config: Config):
+    if not is_admin(callback.from_user.id, config):
+        await callback.answer()
+        return
+
+    months = db.get_appointment_months()
+    if not months:
+        await callback.message.answer("Записей пока нет")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "<b>Выберите месяц:</b>",
+        parse_mode="HTML",
+        reply_markup=months_kb(months),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rec_month:"))
+async def admin_records_month(callback: CallbackQuery, db: Database, config: Config):
+    if not is_admin(callback.from_user.id, config):
+        await callback.answer()
+        return
+    ym = callback.data.split(":", 1)[1]
+    days = db.get_appointment_days_by_month(ym)
+    if not days:
+        await callback.answer("На этот месяц записей нет", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "<b>Выберите день:</b>",
+        parse_mode="HTML",
+        reply_markup=days_kb(days),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rec_day:"))
+async def admin_records_day(callback: CallbackQuery, db: Database, config: Config):
+    if not is_admin(callback.from_user.id, config):
+        await callback.answer()
+        return
+    day = callback.data.split(":", 1)[1]
+    appointments = db.get_appointments_by_date(day)
+    if not appointments:
+        await callback.answer("На этот день записей нет", show_alert=True)
+        return
+
+    lines = [f"<b>Записи на {day}</b>"]
+    for a in appointments:
+        status = "✅ Активна" if a["status"] == "active" else "❌ Отменена"
+        lines.append(
+            f"• {a['slot_time']} | {a['user_name']} ({a['phone']})\n"
+            f"  Услуги: {a['services']}\n"
+            f"  {status}"
+        )
+    await callback.message.answer("\n".join(lines), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_add_service")
+async def admin_add_service_start(callback: CallbackQuery, state: FSMContext, config: Config):
+    if not is_admin(callback.from_user.id, config):
+        await callback.answer()
+        return
+    await state.set_state(AdminStates.add_service_name)
+    await callback.message.answer("Введите название услуги")
+    await callback.answer()
+
+
+@router.message(AdminStates.add_service_name)
+async def admin_add_service_name(message: Message, state: FSMContext, config: Config):
+    if not is_admin(message.from_user.id, config):
+        return
+    await state.update_data(service_name=message.text.strip())
+    await state.set_state(AdminStates.add_service_price)
+    await message.answer("Введите цену услуги (только число)")
+
+
+@router.message(AdminStates.add_service_price)
+async def admin_add_service_price(message: Message, state: FSMContext, db: Database, config: Config):
+    if not is_admin(message.from_user.id, config):
+        return
+    if not message.text.strip().isdigit():
+        await message.answer("Цена должна быть числом. Попробуйте снова.")
+        return
+    data = await state.get_data()
+    db.add_service(data["service_name"], int(message.text.strip()))
+    await message.answer("✅ Услуга добавлена/обновлена")
     await state.clear()
 
 
@@ -186,6 +283,22 @@ async def admin_cancel_client_time(
         await message.answer("Активная запись не найдена")
         await state.clear()
         return
+
     reminder_service.remove_reminder(appt["reminder_job_id"])
     await message.answer("✅ Запись клиента отменена")
+
+    try:
+        await message.bot.send_message(
+            appt["user_id"],
+            (
+                "❗️Ваша запись была отменена администратором.\n"
+                f"Дата: {appt['work_date']}\n"
+                f"Время: {appt['slot_time']}\n"
+                "Пожалуйста, выберите новое время в боте."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await message.answer("⚠️ Не удалось отправить уведомление клиенту")
+
     await state.clear()

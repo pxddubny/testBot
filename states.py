@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class BookingStates(StatesGroup):
+    choosing_services = State()
     choosing_date = State()
     choosing_time = State()
     waiting_name = State()
@@ -19,3 +20,5 @@ class AdminStates(StatesGroup):
     view_schedule_date = State()
     cancel_client_date = State()
     cancel_client_time = State()
+    add_service_name = State()
+    add_service_price = State()
